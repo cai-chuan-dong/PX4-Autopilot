@@ -211,9 +211,15 @@ void Sih::sensor_step()
 
 	read_motors(dt);
 
-	generate_force_and_torques();
+	if (!(_vehicle == VehicleType::RoverAckermann)) {
+		generate_force_and_torques();
 
-	equations_of_motion(dt);
+		equations_of_motion(dt);
+
+	} else {
+		generate_rover_ackermann_dynamics(_u[0], _u[1], dt);
+	}
+
 
 	reconstruct_sensors_signals(now);
 
@@ -422,6 +428,43 @@ void Sih::generate_ts_aerodynamics()
 	_Ma_B = _R_S2B * Ma_ts - _KDW * _w_B; 	// aerodynamic moments
 }
 
+void Sih::generate_rover_ackermann_dynamics(const float throttle_cmd, const float steering_cmd, const float dt)
+{
+	const float MAX_FORCE = 10.0f;          // [N]
+	const float MAX_STEER_ANGLE = 0.5236f;  // [rad] (=30°)
+	const float WHEEL_BASE = 0.321;         // [m] distance between front and rear axle
+	const float CORNERING_STIFFNESS = 1.f;
+
+	// --- Convert nav velocity to body frame ---
+	const matrix::Dcmf R_nb(_q);                     // body to nav frame
+	matrix::Vector3f v_B = R_nb.T() * _v_N;    // nav -> body
+
+	const float vehicle_yaw = matrix::Eulerf(_q).psi();
+
+	// --- Compute input-based thrust ---
+	const float steering_angle = MAX_STEER_ANGLE * steering_cmd;
+	const float force = MAX_FORCE * throttle_cmd;
+
+	v_B(0) = v_B(0) + force * dt / _MASS; // Forward speed
+	const float input_data[3] = {v_B(1), vehicle_yaw, _w_B(2)};
+	const Matrix<float, 3, 1> input(input_data);
+	const float m_data[9] = {-4 * CORNERING_STIFFNESS / (_MASS * v_B(0)), 0, - v_B(0), 0.f, 0.f, 1.f, 0.f, 0.f, -4 * CORNERING_STIFFNESS *WHEEL_BASE *WHEEL_BASE / (_sih_izz.get() * v_B(0))};
+	const Matrix<float, 3, 3> m(m_data);
+	const float steering_input[3] = {2 * CORNERING_STIFFNESS / _MASS, 0.f, WHEEL_BASE *CORNERING_STIFFNESS / _sih_izz.get()};
+	const Matrix<float, 3, 1> steering(steering_input);
+	const Matrix<float, 3, 1> input_updated = (m * input + steering * steering_angle) * dt + input;
+
+	v_B(1) = input_updated(0, 0); // Lateral speed
+	v_B(2) = 0.f;
+
+	_w_B(0) = 0.f;
+	_w_B(1) = 0.f;
+	_w_B(2) = input_updated(2, 0); // Yaw rate
+
+
+
+}
+
 float Sih::computeGravity(const double lat)
 {
 	// Somigliana formula for gravitational acceleration
@@ -459,7 +502,8 @@ void Sih::equations_of_motion(const float dt)
 
 			_grounded = true;
 
-		} else if (_vehicle == VehicleType::FixedWing) {
+		} else if (_vehicle == VehicleType::FixedWing
+			   || _vehicle == VehicleType::RoverAckermann) {
 			Vector3f down_u = _R_N2E.col(2);
 			ground_force_E = -down_u * sum_of_forces_E * down_u;
 
@@ -749,6 +793,9 @@ int Sih::print_status()
 
 	} else if (_vehicle == VehicleType::StandardVTOL) {
 		PX4_INFO("Standard VTOL");
+
+	} else if (_vehicle == VehicleType::RoverAckermann) {
+		PX4_INFO("Rover Ackermann");
 	}
 
 	PX4_INFO("vehicle landed: %d", _grounded);
