@@ -1,0 +1,13 @@
+
+menuconfig MODULES_JONE_DEMO
+  bool "jone_demo"
+  default n
+  ---help---
+    Enable support for jone_demo
+
+menuconfig USER_JONE_DEMO
+  bool "jone_demo running as userspace module"
+  default y
+  depends on BOARD_PROTECTED && MODULES_JONE_DEMO
+  ---help---
+    Put jone_demo in userspace memory
